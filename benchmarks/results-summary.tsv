@@ -1,0 +1,5 @@
+date	machine	device	profile	commit	status	val_bpb	memory_gb	num_steps	total_tokens_M	mfu_percent	training_seconds	total_seconds	seq_len	num_params_M	depth	log_ref	description
+2026-06-14	local	rtx5080	cuda-5080	baseline	keep	1.124884	6.0	372	97.5	8.83	300.8	372.4	2048	50.3	8	results/jun14-rtx5080-cuda5080/000-baseline-rtx5080-cuda5080.log	baseline
+2026-06-15	local	rtx5080	cuda-5080	worktree	keep	1.124008	6.0	381	99.9	9.07	300.0	342.8	2048	50.3	8	results/jun14-rtx5080-cuda5080/003-worktree-keep-warmdown-0p75.log	WARMDOWN_RATIO 0.5 to 0.75
+2026-06-15	local	rtx5080	cuda-5080	worktree	keep	1.121219	6.0	382	100.1	9.08	300.6	343.8	2048	50.3	8	results/jun14-rtx5080-cuda5080/004-worktree-keep-final-lr-frac-0p05.log	FINAL_LR_FRAC 0.0 to 0.05
+2026-06-15	local	rtx5080	cuda-5080	worktree	keep	1.118723	6.0	382	100.1	9.08	300.4	343.0	2048	50.3	8	results/jun14-rtx5080-cuda5080/006-worktree-keep-unembedding-lr-0p006.log	UNEMBEDDING_LR 0.004 to 0.006

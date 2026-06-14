@@ -6,14 +6,15 @@ This is an experiment to have the LLM do its own research.
 
 To set up a new experiment, work with the user to:
 
-1. **Agree on a run tag**: propose a tag based on today's date (e.g. `mar5`). The branch `autoresearch/<tag>` must not already exist — this is a fresh run.
+1. **Agree on a run tag**: propose a tag based on today's date and device/profile (e.g. `jun14-rtx5080-cuda5080` or `jun14-mac-mps-bf16`). The branch `autoresearch/<tag>` must not already exist — this is a fresh run.
 2. **Create the branch**: `git checkout -b autoresearch/<tag>` from current master.
 3. **Read the in-scope files**: The repo is small. Read these files for full context:
    - `README.md` — repository context.
+   - `docs/experiment-results.md` — result artifact naming, summary table, and commit policy.
    - `prepare.py` — fixed constants, data prep, tokenizer, dataloader, evaluation. Do not modify.
    - `train.py` — the file you modify. Model architecture, optimizer, training loop.
 4. **Verify data exists**: Check that `~/.cache/autoresearch/` contains data shards and a tokenizer. If not, tell the human to run `uv run prepare.py`.
-5. **Initialize results.tsv**: Create `results.tsv` with just the header row. The baseline will be recorded after the first run.
+5. **Initialize the result directory**: Create `results/<tag>/results.tsv` with just the header row. The baseline will be recorded after the first run.
 6. **Confirm and go**: Confirm setup looks good.
 
 Once you get confirmation, kick off the experimentation.
@@ -57,15 +58,40 @@ num_params_M:     50.3
 depth:            8
 ```
 
-Note that the script is configured to always stop after 5 minutes, so depending on the computing platform of this computer the numbers might look different. You can extract the key metric from the log file:
+Note that the script is configured to always stop after 5 minutes, so depending on the computing platform of this computer the numbers might look different. You can extract the key metric from a log file:
 
 ```
-grep "^val_bpb:" run.log
+grep "^val_bpb:" results/<tag>/<log-name>.log
 ```
 
 ## Logging results
 
-When an experiment is done, log it to `results.tsv` (tab-separated, NOT comma-separated — commas break in descriptions).
+Follow `docs/experiment-results.md` for result artifact naming, TSV fields, and commit policy.
+
+All artifacts for a run live under `results/<tag>/`, which is ignored by git. Do not leave persistent comparison logs at the repository root.
+
+Use these names:
+
+```
+results/<tag>/results.tsv
+results/<tag>/prepare.log
+results/<tag>/000-baseline-<device>-<profile>.log
+results/<tag>/<NNN>-<short-commit>-<status>-<slug>.log
+```
+
+Examples:
+
+```
+results/jun14-rtx5080-cuda5080/000-baseline-rtx5080-cuda5080.log
+results/jun14-mac-mps-bf16/000-baseline-mac-mps-bf16.log
+results/jun14-rtx5080-cuda5080/012-a1b2c3d-keep-rope-base-200k.log
+```
+
+Use lowercase names. Keep `<device>` and `<profile>` stable across the run so different machines can be compared by directory and filename.
+
+When an experiment is done, log it to `results/<tag>/results.tsv` (tab-separated, NOT comma-separated — commas break in descriptions).
+
+For cross-machine comparison, also append the final summary numbers to `benchmarks/results-summary.tsv` when the result is useful to preserve. Keep raw logs under ignored `results/<tag>/`; keep only the compact summary table in git.
 
 The TSV has a header row and 5 columns:
 
@@ -98,10 +124,10 @@ LOOP FOREVER:
 1. Look at the git state: the current branch/commit we're on
 2. Tune `train.py` with an experimental idea by directly hacking the code.
 3. git commit
-4. Run the experiment: `uv run train.py > run.log 2>&1` (redirect everything — do NOT use tee or let output flood your context)
-5. Read out the results: `grep "^val_bpb:\|^peak_vram_mb:" run.log`
-6. If the grep output is empty, the run crashed. Run `tail -n 50 run.log` to read the Python stack trace and attempt a fix. If you can't get things to work after more than a few attempts, give up.
-7. Record the results in the tsv (NOTE: do not commit the results.tsv file, leave it untracked by git)
+4. Run the experiment: `uv run train.py > results/<tag>/<log-name>.log 2>&1` (redirect everything — do NOT use tee or let output flood your context)
+5. Read out the results: `grep "^val_bpb:\|^peak_vram_mb:" results/<tag>/<log-name>.log`
+6. If the grep output is empty, the run crashed. Run `tail -n 50 results/<tag>/<log-name>.log` to read the Python stack trace and attempt a fix. If you can't get things to work after more than a few attempts, give up.
+7. Record the results in the tsv (NOTE: do not commit the `results/` directory, leave it untracked by git)
 8. If val_bpb improved (lower), you "advance" the branch, keeping the git commit
 9. If val_bpb is equal or worse, you git reset back to where you started
 

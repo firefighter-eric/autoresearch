@@ -8,6 +8,7 @@ wheels/
 
 # Virtual environments
 .venv
+uv.lock
 worktrees/
 results/
 queue/
@@ -19,5 +20,7 @@ AGENTS.md
 # Experimental code/artifacts
 dev/
 
-# Results file
+# Local run logs and result tables
+run.log
+prepare.log
 results.tsv

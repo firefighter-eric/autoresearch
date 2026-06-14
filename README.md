@@ -43,6 +43,8 @@ uv run train.py
 
 If the above commands all work ok, your setup is working and you can go into autonomous research mode.
 
+`uv.lock` is kept in the repo, but `uv` may rewrite it differently across CUDA, MPS, CPU, Python, and package-index setups. Do not commit machine-specific lockfile churn unless you are intentionally updating dependencies.
+
 ### Device profiles
 
 This fork auto-detects the device and selects a conservative profile:
@@ -60,6 +62,10 @@ AUTORESEARCH_PROFILE=manual uv run train.py
 ```
 
 Available profiles are `cuda-large`, `cuda-5080`, `cuda-mid`, `mps`, `cpu`, and `manual`. The `manual` profile keeps the constants in `train.py` unchanged for experiments. The default attention backend is PyTorch SDPA, which avoids Flash Attention kernel compatibility issues on Mac and RTX 50-series cards.
+
+### Result artifacts
+
+Raw logs and local per-run TSVs live under ignored `results/<run-tag>/` directories. Cross-machine summary rows live in `benchmarks/results-summary.tsv`. See `docs/experiment-results.md` for the naming scheme, TSV fields, and what should be committed.
 
 ## Running the agent
 
