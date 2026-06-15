@@ -67,6 +67,25 @@ Available profiles are `cuda-large`, `cuda-5080`, `cuda-mid`, `mps`, `cpu`, and 
 
 Raw logs and local per-run TSVs live under ignored `results/<run-tag>/` directories. Cross-machine summary rows live in `benchmarks/results-summary.tsv`. See `docs/experiment-results.md` for the naming scheme, TSV fields, and what should be committed.
 
+### W&B logging
+
+W&B is optional and disabled by default. To log a run:
+
+```bash
+AUTORESEARCH_WANDB=1 uv run --with wandb train.py
+```
+
+Useful environment variables:
+
+```bash
+AUTORESEARCH_WANDB_PROJECT=autoresearch
+AUTORESEARCH_WANDB_RUN_NAME=jun15-rtx5080-unembedding-lr-0p007
+AUTORESEARCH_WANDB_GROUP=jun15-rtx5080-cuda5080-param-sweep
+AUTORESEARCH_WANDB_JOB_TYPE=param-sweep
+AUTORESEARCH_WANDB_TAGS=rtx5080,cuda-5080,param-sweep
+AUTORESEARCH_WANDB_MODE=offline
+```
+
 ## Running the agent
 
 Simply spin up your Claude/Codex or whatever you want in this repo (and disable all permissions), then you can prompt something like:
