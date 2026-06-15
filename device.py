@@ -58,7 +58,8 @@ def get_total_memory_gb(device):
 def get_autocast_context(device):
     if device.type == "cuda":
         return torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16)
-    # MPS autocast support varies across PyTorch/macOS versions; stay explicit.
+    if device.type == "mps":
+        return torch.amp.autocast(device_type="mps", dtype=torch.bfloat16)
     return contextlib.nullcontext()
 
 

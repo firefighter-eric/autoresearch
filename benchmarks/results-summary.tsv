@@ -3,3 +3,5 @@ date	machine	device	profile	commit	status	val_bpb	memory_gb	num_steps	total_toke
 2026-06-15	local	rtx5080	cuda-5080	worktree	keep	1.124008	6.0	381	99.9	9.07	300.0	342.8	2048	50.3	8	results/jun14-rtx5080-cuda5080/003-worktree-keep-warmdown-0p75.log	WARMDOWN_RATIO 0.5 to 0.75
 2026-06-15	local	rtx5080	cuda-5080	worktree	keep	1.121219	6.0	382	100.1	9.08	300.6	343.8	2048	50.3	8	results/jun14-rtx5080-cuda5080/004-worktree-keep-final-lr-frac-0p05.log	FINAL_LR_FRAC 0.0 to 0.05
 2026-06-15	local	rtx5080	cuda-5080	worktree	keep	1.118723	6.0	382	100.1	9.08	300.4	343.0	2048	50.3	8	results/jun14-rtx5080-cuda5080/006-worktree-keep-unembedding-lr-0p006.log	UNEMBEDDING_LR 0.004 to 0.006
+2026-06-14	local	mac-mps	mps	baseline	keep	1.572640	0.3	157	10.3	0.18	300.3	542.8	2048	11.5	4	results/jun14-mac-mps/000-baseline-mac-mps.log	mps fp32 baseline
+2026-06-14	local	mac-mps	mps	worktree	keep	1.486914	0.2	192	12.6	0.23	300.8	480.2	2048	11.5	4	results/jun14-mac-mps-bf16/000-baseline-mac-mps-bf16.log	enable MPS bfloat16 autocast
