@@ -30,6 +30,63 @@ from device import (
 )
 from prepare import MAX_SEQ_LEN, TIME_BUDGET, Tokenizer, make_dataloader, evaluate_bpb
 
+
+def env_flag(name, default=False):
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.lower() in {"1", "true", "yes", "on"}
+
+
+def setup_wandb(run_config):
+    if not env_flag("AUTORESEARCH_WANDB"):
+        print("W&B: disabled")
+        return None
+    try:
+        import wandb
+    except ImportError as exc:
+        raise RuntimeError(
+            "AUTORESEARCH_WANDB=1 requires wandb. Run with: "
+            "AUTORESEARCH_WANDB=1 uv run --with wandb train.py"
+        ) from exc
+
+    kwargs = {
+        "project": os.environ.get("AUTORESEARCH_WANDB_PROJECT", "autoresearch"),
+        "config": run_config,
+    }
+    run_name = os.environ.get("AUTORESEARCH_WANDB_RUN_NAME")
+    if run_name:
+        kwargs["name"] = run_name
+    run_tags = os.environ.get("AUTORESEARCH_WANDB_TAGS")
+    if run_tags:
+        kwargs["tags"] = [tag.strip() for tag in run_tags.split(",") if tag.strip()]
+    run_notes = os.environ.get("AUTORESEARCH_WANDB_NOTES")
+    if run_notes:
+        kwargs["notes"] = run_notes
+    run_group = os.environ.get("AUTORESEARCH_WANDB_GROUP")
+    if run_group:
+        kwargs["group"] = run_group
+    run_job_type = os.environ.get("AUTORESEARCH_WANDB_JOB_TYPE")
+    if run_job_type:
+        kwargs["job_type"] = run_job_type
+    run_mode = os.environ.get("AUTORESEARCH_WANDB_MODE")
+    if run_mode:
+        kwargs["mode"] = run_mode
+
+    run = wandb.init(**kwargs)
+    print(f"W&B: enabled ({run.url})")
+    return run
+
+
+def log_wandb(wandb_run, metrics, step=None):
+    if wandb_run is not None:
+        wandb_run.log(metrics, step=step)
+
+
+def finish_wandb(wandb_run, exit_code=0):
+    if wandb_run is not None:
+        wandb_run.finish(exit_code=exit_code)
+
 # ---------------------------------------------------------------------------
 # GPT Model
 # ---------------------------------------------------------------------------
@@ -619,6 +676,34 @@ x, y, epoch = next(train_loader)  # prefetch first batch
 print(f"Time budget: {TIME_BUDGET}s")
 print(f"Gradient accumulation steps: {grad_accum_steps}")
 
+wandb_run = setup_wandb({
+    "device": device.type,
+    "device_name": get_device_name(device),
+    "cuda_capability": capability,
+    "profile": selected_profile,
+    "compile_enabled": compile_enabled,
+    "sequence_len": MAX_SEQ_LEN,
+    "time_budget": TIME_BUDGET,
+    "vocab_size": vocab_size,
+    "model": asdict(config),
+    "param_counts": param_counts,
+    "num_params": num_params,
+    "num_flops_per_token": num_flops_per_token,
+    "grad_accum_steps": grad_accum_steps,
+    "total_batch_size": TOTAL_BATCH_SIZE,
+    "device_batch_size": DEVICE_BATCH_SIZE,
+    "tokens_per_fwdbwd": tokens_per_fwdbwd,
+    "embedding_lr": EMBEDDING_LR,
+    "unembedding_lr": UNEMBEDDING_LR,
+    "matrix_lr": MATRIX_LR,
+    "scalar_lr": SCALAR_LR,
+    "weight_decay": WEIGHT_DECAY,
+    "adam_betas": ADAM_BETAS,
+    "warmup_ratio": WARMUP_RATIO,
+    "warmdown_ratio": WARMDOWN_RATIO,
+    "final_lr_frac": FINAL_LR_FRAC,
+})
+
 # Schedules (all based on progress = training_time / TIME_BUDGET)
 
 def get_lr_multiplier(progress):
@@ -675,6 +760,11 @@ while True:
     # Fast fail: abort if loss is exploding or NaN
     if math.isnan(train_loss_f) or train_loss_f > 100:
         print("FAIL")
+        log_wandb(wandb_run, {
+            "run/failed": 1,
+            "train/loss": train_loss_f,
+        }, step=step)
+        finish_wandb(wandb_run, exit_code=1)
         exit(1)
 
     sync_device(device)
@@ -694,6 +784,20 @@ while True:
     remaining = max(0, TIME_BUDGET - total_training_time)
 
     print(f"\rstep {step:05d} ({pct_done:.1f}%) | loss: {debiased_smooth_loss:.6f} | lrm: {lrm:.2f} | dt: {dt*1000:.0f}ms | tok/sec: {tok_per_sec:,} | mfu: {mfu:.1f}% | epoch: {epoch} | remaining: {remaining:.0f}s    ", end="", flush=True)
+
+    log_wandb(wandb_run, {
+        "train/loss": train_loss_f,
+        "train/smooth_loss": debiased_smooth_loss,
+        "train/lr_multiplier": lrm,
+        "train/muon_momentum": muon_momentum,
+        "train/muon_weight_decay": muon_weight_decay,
+        "perf/step_ms": dt * 1000,
+        "perf/tokens_per_sec": tok_per_sec,
+        "perf/mfu_percent": mfu,
+        "run/progress": progress,
+        "run/remaining_seconds": remaining,
+        "data/epoch": epoch,
+    }, step=step)
 
     # GC management (Python's GC causes ~500ms stalls)
     if step == 0:
@@ -723,14 +827,31 @@ t_end = time.time()
 startup_time = t_start_training - t_start
 steady_state_mfu = 100 * num_flops_per_token * TOTAL_BATCH_SIZE * (step - 10) / total_training_time / H100_BF16_PEAK_FLOPS if total_training_time > 0 else 0
 peak_vram_mb = get_peak_memory_mb(device)
+final_metrics = {
+    "val_bpb": val_bpb,
+    "training_seconds": total_training_time,
+    "total_seconds": t_end - t_start,
+    "peak_vram_mb": peak_vram_mb,
+    "mfu_percent": steady_state_mfu,
+    "total_tokens_M": total_tokens / 1e6,
+    "num_steps": step,
+    "num_params_M": num_params / 1e6,
+    "depth": DEPTH,
+}
+
+if wandb_run is not None:
+    for key, value in final_metrics.items():
+        wandb_run.summary[key] = value
+    log_wandb(wandb_run, {f"final/{key}": value for key, value in final_metrics.items()}, step=step)
+    finish_wandb(wandb_run)
 
 print("---")
-print(f"val_bpb:          {val_bpb:.6f}")
-print(f"training_seconds: {total_training_time:.1f}")
-print(f"total_seconds:    {t_end - t_start:.1f}")
-print(f"peak_vram_mb:     {peak_vram_mb:.1f}")
-print(f"mfu_percent:      {steady_state_mfu:.2f}")
-print(f"total_tokens_M:   {total_tokens / 1e6:.1f}")
-print(f"num_steps:        {step}")
-print(f"num_params_M:     {num_params / 1e6:.1f}")
-print(f"depth:            {DEPTH}")
+print(f"val_bpb:          {final_metrics['val_bpb']:.6f}")
+print(f"training_seconds: {final_metrics['training_seconds']:.1f}")
+print(f"total_seconds:    {final_metrics['total_seconds']:.1f}")
+print(f"peak_vram_mb:     {final_metrics['peak_vram_mb']:.1f}")
+print(f"mfu_percent:      {final_metrics['mfu_percent']:.2f}")
+print(f"total_tokens_M:   {final_metrics['total_tokens_M']:.1f}")
+print(f"num_steps:        {final_metrics['num_steps']}")
+print(f"num_params_M:     {final_metrics['num_params_M']:.1f}")
+print(f"depth:            {final_metrics['depth']}")

@@ -64,6 +64,12 @@ Note that the script is configured to always stop after 5 minutes, so depending 
 grep "^val_bpb:" results/<tag>/<log-name>.log
 ```
 
+Optional W&B logging is available when the human wants online/offline tracking:
+
+```
+AUTORESEARCH_WANDB=1 AUTORESEARCH_WANDB_RUN_NAME=<log-name> uv run --with wandb train.py > results/<tag>/<log-name>.log 2>&1
+```
+
 ## Logging results
 
 Follow `docs/experiment-results.md` for result artifact naming, TSV fields, and commit policy.
