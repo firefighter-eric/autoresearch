@@ -2,6 +2,44 @@
 
 这个仓库把本机原始产物和可提交的对比摘要分开管理。
 
+## 当前 Mac MPS 结论
+
+当前可提交的 Mac 改动是对 MPS 开启 `bfloat16` autocast，但参数仍保持 `float32`：
+
+```text
+device.type == "mps" -> torch.amp.autocast(device_type="mps", dtype=torch.bfloat16)
+get_parameter_dtype("mps") -> torch.float32
+```
+
+相对 `mps` fp32 baseline：
+
+```text
+baseline val_bpb: 1.572640
+bf16 val_bpb:     1.486914
+improvement:      0.085726，约 5.45%
+```
+
+本轮实验结果：
+
+```text
+status   val_bpb   steps   tokens_M   memory_mb   total_s   change
+keep     1.572640  157     10.3       356.6       542.8     mps fp32 baseline
+keep     1.486914  192     12.6       220.6       480.2     enable MPS bfloat16 autocast
+```
+
+主要 insight：
+
+1. **MPS bf16 autocast 是明确正收益。** 固定 5 分钟训练预算下，optimizer steps 从 `157` 增加到 `192`，训练 token 从 `10.3M` 增加到 `12.6M`，`val_bpb` 从 `1.572640` 降到 `1.486914`。
+2. **这次收益主要来自吞吐提升。** 每步时间下降后，Mac 在同样训练预算里多做了约 `22%` 的 optimizer step；这和此前 H100/5080 经验一致：小设备上先提高有效训练量，比盲目加大模型更稳。
+3. **显存/统一内存占用也下降。** `peak_vram_mb` 从 `356.6` 降到 `220.6`，说明只开 autocast 不但没有增加内存压力，反而降低了高流量算子的临时张量成本。
+4. **先保留 fp32 参数更稳。** 当前改动没有把 embedding、optimizer state 或模型参数整体转 bf16，只让 forward/loss 的可 autocast 算子使用 bf16；这是低风险路径，后续如果要试参数 bf16，应单独作为实验记录。
+
+下一轮优先方向：
+
+1. 保留 MPS bf16 autocast 作为 Mac 默认路径。
+2. 单独测试 `get_parameter_dtype("mps") -> torch.bfloat16`，确认 embedding/value embedding 转 bf16 是否继续提升，还是带来数值或 optimizer 风险。
+3. 继续优先尝试不降低吞吐的 Mac profile 改动，例如 schedule、LR、batch/accumulation，而不是加深或加宽模型。
+
 ## 当前 RTX 5080 结论
 
 当前可提交的最佳配置来自 `jun14-rtx5080-cuda5080` 这轮实验：
