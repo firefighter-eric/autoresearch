@@ -552,7 +552,7 @@ SCALAR_LR = 0.5         # learning rate for per-layer scalars (Adam)
 WEIGHT_DECAY = 0.2      # cautious weight decay for Muon
 ADAM_BETAS = (0.8, 0.95) # Adam beta1, beta2
 WARMUP_RATIO = 0.0      # fraction of time budget for LR warmup
-WARMDOWN_RATIO = 0.75   # fraction of time budget for LR warmdown
+WARMDOWN_RATIO = 0.62   # fraction of time budget for LR warmdown
 FINAL_LR_FRAC = 0.05    # final LR as fraction of initial
 
 # Model size
@@ -586,7 +586,7 @@ def apply_device_profile(device, capability, total_memory_gb):
         # Large CUDA path keeps the original scale, but uses full causal SDPA by default.
         "cuda-large": dict(window_pattern="L", total_batch_size=2**19, depth=8, device_batch_size=128),
         # RTX 50 / Blackwell: keep depth, reduce per-device batch, avoid masked sliding windows.
-        "cuda-5080": dict(window_pattern="L", total_batch_size=2**18, depth=8, device_batch_size=16),
+        "cuda-5080": dict(window_pattern="L", total_batch_size=2**18, depth=8, device_batch_size=8),
         "cuda-mid": dict(window_pattern="L", total_batch_size=2**17, depth=6, device_batch_size=16),
         "mps": dict(window_pattern="L", total_batch_size=2**16, depth=4, device_batch_size=16),
         "cpu": dict(window_pattern="L", total_batch_size=2**11, depth=2, device_batch_size=1),

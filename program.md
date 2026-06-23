@@ -97,7 +97,7 @@ Use lowercase names. Keep `<device>` and `<profile>` stable across the run so di
 
 When an experiment is done, log it to `results/<tag>/results.tsv` (tab-separated, NOT comma-separated — commas break in descriptions).
 
-For cross-machine comparison, also append the final summary numbers to `benchmarks/results-summary.tsv` when the result is useful to preserve. Keep raw logs under ignored `results/<tag>/`; keep only the compact summary table in git.
+For cross-machine comparison, also append the final summary numbers to `benchmarks/results-summary.tsv` when the result is useful to preserve. Keep raw logs under ignored `results/<tag>/`; keep only the compact summary table in git. The TSV is canonical; after editing it, regenerate the CSV copy with `uv run python scripts/sync_results_csv.py`.
 
 The TSV has a header row and 5 columns:
 
@@ -134,8 +134,9 @@ LOOP FOREVER:
 5. Read out the results: `grep "^val_bpb:\|^peak_vram_mb:" results/<tag>/<log-name>.log`
 6. If the grep output is empty, the run crashed. Run `tail -n 50 results/<tag>/<log-name>.log` to read the Python stack trace and attempt a fix. If you can't get things to work after more than a few attempts, give up.
 7. Record the results in the tsv (NOTE: do not commit the `results/` directory, leave it untracked by git)
-8. If val_bpb improved (lower), you "advance" the branch, keeping the git commit
-9. If val_bpb is equal or worse, you git reset back to where you started
+8. If `benchmarks/results-summary.tsv` changed, run `uv run python scripts/sync_results_csv.py` to refresh the generated CSV copy
+9. If val_bpb improved (lower), you "advance" the branch, keeping the git commit
+10. If val_bpb is equal or worse, you git reset back to where you started
 
 The idea is that you are a completely autonomous researcher trying things out. If they work, keep. If they don't, discard. And you're advancing the branch so that you can iterate. If you feel like you're getting stuck in some way, you can rewind but you should probably do this very very sparingly (if ever).
 
