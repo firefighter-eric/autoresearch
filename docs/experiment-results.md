@@ -18,8 +18,9 @@ all    11      931840   693684953    694616793
 ```text
 run type                         steps  tokens
 cuda-5080 normal                 379    99352576  (~99.4M)
+cuda-5080 device_batch_size=8    368    96468992  (~96.5M)
 cuda-5080 device_batch_size=32   397    104071168 (~104.1M)
-jun16 20-run sweep total         -      1991770112 (~1.99B token-passes)
+jun16 21-run sweep total         -      2088239104 (~2.09B token-passes)
 ```
 
 `program.md` 里的默认示例没有明确机器型号，但 `peak_vram_mb=45060.2`、`mfu_percent=39.80`，基本对应 H100 / 大显存 CUDA 级别机器。它的训练量是：
@@ -75,12 +76,14 @@ keep     1.486914  192     12.6       220.6       480.2     enable MPS bfloat16 
 
 ## 当前 RTX 5080 结论
 
-当前可提交的 RTX 5080 配置来自 `jun16-rtx5080-cuda5080-param20` 这轮 W&B online sweep：
+当前可提交的 RTX 5080 配置来自 `jun16-rtx5080-cuda5080-param20` 这轮 W&B online sweep 之后追加的 batch-size 和 depth 实验：
 
 ```text
 UNEMBEDDING_LR = 0.006
 WARMDOWN_RATIO = 0.62
 FINAL_LR_FRAC = 0.05
+cuda-5080 depth = 8
+cuda-5080 device_batch_size = 8
 ```
 
 历史最佳和本轮线上可比结果要分开看：
@@ -90,12 +93,18 @@ original cuda-5080 baseline:        1.124884
 historical best before W&B online:  1.118723
 W&B online control, same params:    1.119551
 W&B online best, warmdown 0.62:     1.118794
-online control improvement:         0.000757，约 0.068%
+W&B online best, batch size 8:      1.117817
+W&B batch size 4 check:             1.117953
+W&B smaller depth 6 check:          1.118114
+W&B depth 6 + batch size 16 check:  1.123627
+W&B depth 10 + batch size 8 check:  1.185109
+W&B depth 10 + batch size 4 check:  1.179449
+online control improvement:         0.001734，约 0.155%
 ```
 
-`1.118794` 仍比历史 `1.118723` 高 `0.000071`，但它是在 W&B online 逐步 logging 开启后的可比最佳。因为 LR schedule 按 wall-clock progress 衰减，W&B online 的额外开销会轻微改变每一步对应的 LR，因此本轮用 online control 作为主要参照。
+`device_batch_size=8` 的 `1.117817` 已经低于历史 `1.118723` 和 W&B online control。因为 LR schedule 按 wall-clock progress 衰减，W&B online 的额外开销会轻微改变每一步对应的 LR，因此本轮仍用 online control 作为主要参照。
 
-本轮 20 次 W&B online 实验结果：
+本轮 W&B online 实验结果：
 
 ```text
 status       val_bpb   W&B run     change
@@ -119,6 +128,12 @@ discard      1.118858  f7imtocw    WARMDOWN_RATIO 0.62 -> 0.61
 discard      1.118995  5i37diu3    WARMDOWN_RATIO 0.62 -> 0.625
 discard      1.118829  6t5lhxpn    WARMDOWN_RATIO 0.62 plus MATRIX_LR 0.045
 discard      1.119033  0ryet5y7    WARMDOWN_RATIO 0.62 plus FINAL_LR_FRAC 0.06
+keep-online  1.117817  xc69hrb8    WARMDOWN_RATIO 0.62 plus device_batch_size 16 -> 8
+discard      1.117953  n8vin2ze    device_batch_size 8 -> 4
+discard      1.118114  fzitxzd4    depth 8 -> 6 on batch 8 base
+discard      1.123627  yk5k5rcq    depth 6 plus device_batch_size 8 -> 16
+discard      1.185109  7oulf4ir    depth 8 -> 10 plus device_batch_size 8
+discard      1.179449  yn5qjmmb    depth 8 -> 10 plus device_batch_size 4
 ```
 
 主要 insight：
@@ -126,14 +141,17 @@ discard      1.119033  0ryet5y7    WARMDOWN_RATIO 0.62 plus FINAL_LR_FRAC 0.06
 1. **本轮主要收益来自更短 warmdown。** W&B online control 是 `1.119551`，`WARMDOWN_RATIO=0.62` 降到 `1.118794`。固定 5 分钟预算下，online logging 让 schedule 对 wall-clock 更敏感，0.75 会偏早进入低 LR 的后半段；0.62 保留了更长高 LR 训练，同时仍有足够末段收敛。
 2. **0.62 附近存在清晰局部最优。** `0.60` 是 `1.118889`，`0.61` 是 `1.118858`，`0.62` 最好，`0.625` 和 `0.63` 又回退。这说明方向不是随机单点，而是一个窄窗口。
 3. **lm_head LR 的旧结论没有继续外推。** 在 `UNEMBEDDING_LR=0.006` 基础上改到 `0.005/0.007/0.008` 都变差，说明当前输出层 LR 已经接近合适，不再需要继续加。
-4. **更大 microbatch 速度更快但质量明显变差。** `device_batch_size 16 -> 32` 把 tokens 从 `99.4M` 提到 `104.1M`、MFU 从约 `9.01%` 到 `9.44%`，但 `val_bpb` 变差到 `1.128194`，并且显存涨到约 `11.4GB`。这不是值得保留的吞吐优化。
-5. **组合调参没有超过单独 warmdown。** `0.62 + MATRIX_LR=0.045` 得到 `1.118829`，非常接近但仍差于 `0.62`；`0.62 + FINAL_LR_FRAC=0.06` 得到 `1.119033`。当前应该先保留 `WARMDOWN_RATIO=0.62`，不要叠加这些组合。
+4. **microbatch 方向不是单调吞吐最优。** `device_batch_size 16 -> 32` 把 tokens 从 `99.4M` 提到 `104.1M`、MFU 从约 `9.01%` 到 `9.44%`，但 `val_bpb` 变差到 `1.128194`，显存也涨到约 `11.4GB`。相反，`device_batch_size 16 -> 8` 只训练 `96.5M` tokens、MFU 降到 `8.75%`，但 `val_bpb` 提升到 `1.117817`，显存降到约 `3.3GB`。继续把 `device_batch_size 8 -> 4` 后，tokens 降到 `92.5M`、显存降到约 `1.9GB`，但 `val_bpb=1.117953`，非常接近但没超过 batch 8。这说明当前模型更受 microbatch 数值/噪声形态影响，而不只是训练 token 数；batch 8 是目前最好的折中。
+5. **小模型吞吐翻倍但没有赢。** 在 batch 8 底座上把 `depth 8 -> 6` 后，参数从 `50.3M` 降到 `26.3M`，显存从约 `3.3GB` 降到 `2.0GB`，5 分钟训练 tokens 从 `96.5M` 提到 `187.7M`，但 `val_bpb=1.118114`，仍差于当前最佳 `1.117817`。这说明 5080 上不是单纯缺训练 token；`depth=8` 的容量在当前 5 分钟任务里仍然值钱。
+6. **depth=6 下 batch 16 明显变差。** 在同样 `depth=6` 下把 `device_batch_size 8 -> 16` 后，训练量几乎不变（`187.7M -> 186.6M` tokens），显存升到约 `3.6GB`，但 `val_bpb` 退到 `1.123627`。这说明 batch/microbatch 影响的不只是吞吐，也会明显改变优化轨迹；当前小模型更适合 batch 8。
+7. **加大到 depth 10 明显不适合当前 5 分钟预算。** `depth 8 -> 10` 后参数从 `50.3M` 涨到 `85.9M`，但 5 分钟训练量从 `96.5M` tokens 掉到约 `56-57M`。`device_batch_size=8` 得到 `1.185109`，`device_batch_size=4` 得到 `1.179449`；batch 4 对 depth 10 有帮助，也省显存（约 `5.1GB -> 3.1GB`），但仍远差于当前最佳 `1.117817`。这说明当前 5080 固定时间任务里，继续加大模型会被训练量不足严重拖垮。
+8. **组合调参没有超过 batch 8。** `0.62 + MATRIX_LR=0.045` 得到 `1.118829`，接近但差于 `0.62` 单独配置；`0.62 + FINAL_LR_FRAC=0.06` 得到 `1.119033`。当前应该保留 `WARMDOWN_RATIO=0.62` 和 `device_batch_size=8`，不要叠加这些组合。
 
 下一轮优先方向：
 
-1. 如果继续 5080 online sweep，优先小步测 `WARMDOWN_RATIO=0.615/0.618/0.622`，不要再大范围扫。
-2. 可以单独测试 `MATRIX_LR=0.035` 或 `WEIGHT_DECAY=0.25`，但要以 `WARMDOWN_RATIO=0.62` 为底座。
-3. 暂缓 `device_batch_size=32`、加深模型、RoPE base 200k 这类已经显示负收益或与当前 2K context 不匹配的方向。
+1. 如果继续 5080 online sweep，优先以 `WARMDOWN_RATIO=0.62`、`device_batch_size=8` 为底座。
+2. 可以在 batch 8 底座上小步测 `WARMDOWN_RATIO=0.615/0.622`，确认 batch 8 的收益是否还能扩大。
+3. 暂缓 `device_batch_size=4/32`、`depth=6` 小模型、`depth=6 + device_batch_size=16`、`depth=10` 大模型、RoPE base 200k 这类已经显示负收益或与当前 2K context 不匹配的方向。
 
 ## 哪些进 Git
 
@@ -141,10 +159,12 @@ discard      1.119033  0ryet5y7    WARMDOWN_RATIO 0.62 plus FINAL_LR_FRAC 0.06
 
 ```text
 benchmarks/results-summary.tsv
+benchmarks/results-summary.csv
 docs/experiment-results.md
 README.md
 program.md
 pyproject.toml
+scripts/sync_results_csv.py
 ```
 
 不要提交这些本地产物：
@@ -232,7 +252,7 @@ experiment	val_bpb	memory_gb	status	wandb_url	description
 
 ## 跨机器汇总表
 
-使用 `benchmarks/results-summary.tsv` 做轻量、可提交的跨机器对比。
+使用 `benchmarks/results-summary.tsv` 做轻量、可提交的跨机器对比。TSV 是 canonical，便于手动追加、review 和冲突合并；`benchmarks/results-summary.csv` 是从 TSV 自动生成的副本，方便导入表格工具。
 
 表头：
 
@@ -241,6 +261,14 @@ date	machine	device	profile	commit	status	val_bpb	memory_gb	num_steps	total_toke
 ```
 
 每个值得保留的结果记录一行。这个汇总表只放从日志末尾 summary 复制出来的最终数字，不要把完整日志粘进来。
+
+更新 TSV 后运行：
+
+```bash
+uv run python scripts/sync_results_csv.py
+```
+
+脚本会校验每行列数，然后覆盖生成 `benchmarks/results-summary.csv`。不要手动编辑 CSV；如果 CSV 和 TSV 冲突，以 TSV 为准重新生成。
 
 每条日志需要提取这些值：
 
@@ -284,3 +312,4 @@ results/jun14-rtx5080-cuda5080/000-baseline-rtx5080-cuda5080.log
 4. 提取指标：`grep "^val_bpb:\|^peak_vram_mb:\|^num_steps:\|^total_tokens_M:" results/<run-tag>/<log-name>.log`。
 5. 把原始结果追加到 `results/<run-tag>/results.tsv`。
 6. 把重要的可比较结果追加到 `benchmarks/results-summary.tsv`。
+7. 运行 `uv run python scripts/sync_results_csv.py` 同步生成 `benchmarks/results-summary.csv`。

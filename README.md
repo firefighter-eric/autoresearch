@@ -102,6 +102,7 @@ The `program.md` file is essentially a super lightweight "skill".
 prepare.py      — constants, data prep + runtime utilities (do not modify)
 train.py        — model, optimizer, training loop (agent modifies this)
 program.md      — agent instructions
+scripts/        — small maintenance utilities, including TSV-to-CSV export
 pyproject.toml  — dependencies
 ```
 
