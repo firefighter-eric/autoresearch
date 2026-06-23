@@ -19,6 +19,7 @@ all    11      931840   693684953    694616793
 run type                         steps  tokens
 cuda-5080 normal                 379    99352576  (~99.4M)
 cuda-5080 device_batch_size=8    368    96468992  (~96.5M)
+cuda-5080 aspect_ratio=48        560    146800640 (~146.8M)
 cuda-5080 device_batch_size=32   397    104071168 (~104.1M)
 jun16 21-run sweep total         -      2088239104 (~2.09B token-passes)
 ```
@@ -28,6 +29,26 @@ jun16 21-run sweep total         -      2088239104 (~2.09B token-passes)
 ```text
 953 steps * 524288 tokens/step = 499646464 tokens (~499.6M)
 ```
+
+## MFU 分母参考
+
+`train.py` 里的 `mfu_percent` 当前固定用 `H100_BF16_PEAK_FLOPS = 989.5e12` 做分母，也就是 H100 SXM dense BF16 Tensor peak。不同 GPU 横向比较时，先把这个字段理解成 H100-normalized MFU；如果要粗略换成某张 GPU 自己的 dense BF16 Tensor MFU，可以乘下面的换算倍数。
+
+| GPU | BF16 Tensor peak, dense TFLOPS | BF16 Tensor peak, sparse/effective TFLOPS | H100-normalized MFU 换到本卡约乘 | 来源 |
+| --- | ---: | ---: | ---: | --- |
+| H100 SXM | 989.5 | 1,979 | 1.00x | [NVIDIA H100 specs](https://www.nvidia.com/en-us/data-center/h100/) |
+| A100 80GB | 312.0 | 624 | 3.17x | [NVIDIA A100 specs](https://www.nvidia.com/en-us/data-center/a100/) |
+| L40S | 362.1 | 733 | 2.73x | [NVIDIA L40S specs](https://www.nvidia.com/en-us/data-center/l40s/) |
+| L4 | 121.0 | 242 | 8.18x | [NVIDIA L4 specs](https://www.nvidia.com/en-us/data-center/l4/) |
+| RTX 5090 | 209.5 | 419 | 4.72x | [NVIDIA RTX Blackwell architecture](https://images.nvidia.com/aem-dam/Solutions/geforce/blackwell/nvidia-rtx-blackwell-gpu-architecture.pdf) |
+| RTX 5080 | 112.6 | 225.1 | 8.79x | [NVIDIA RTX Blackwell architecture](https://images.nvidia.com/aem-dam/Solutions/geforce/blackwell/nvidia-rtx-blackwell-gpu-architecture.pdf) |
+| RTX 4090 | 165.2 | 330.4 | 5.99x | [NVIDIA RTX Blackwell architecture](https://images.nvidia.com/aem-dam/Solutions/geforce/blackwell/nvidia-rtx-blackwell-gpu-architecture.pdf) |
+| RTX 4080 | 97.5 | 195 | 10.15x | [NVIDIA RTX Blackwell architecture](https://images.nvidia.com/aem-dam/Solutions/geforce/blackwell/nvidia-rtx-blackwell-gpu-architecture.pdf) |
+| RTX 3080 | 59.5 | 119 | 16.63x | [NVIDIA RTX Blackwell architecture](https://images.nvidia.com/aem-dam/Solutions/geforce/blackwell/nvidia-rtx-blackwell-gpu-architecture.pdf) |
+
+这里优先看 dense peak，因为本训练没有显式利用 2:4 sparsity。NVIDIA 页面里带 `with sparsity` 或 `effective` 的数值通常是 dense 的 2 倍。
+
+例如当前 RTX 5080 best 记录的 `mfu_percent=8.69` 是 H100-normalized；按 RTX 5080 dense BF16 Tensor peak 粗略换算是 `8.69 * 8.79 ≈ 76.4%`。
 
 按 `prepare.py` 的全量配置，数据集最多包含 `6542` 个 train shard 加 `1` 个 pinned val shard。基于当前本地 shard 的平均 token 密度粗估，全量数据约为：
 
@@ -76,33 +97,42 @@ keep     1.486914  192     12.6       220.6       480.2     enable MPS bfloat16 
 
 ## 当前 RTX 5080 结论
 
-当前可提交的 RTX 5080 配置来自 `jun16-rtx5080-cuda5080-param20` 这轮 W&B online sweep 之后追加的 batch-size 和 depth 实验：
+当前 RTX 5080 推荐配置来自 `jun23-rtx5080-head-dim-v2` 这轮 head/dim follow-up 实验：
 
 ```text
+ASPECT_RATIO = 48
+HEAD_DIM = 128
 UNEMBEDDING_LR = 0.006
 WARMDOWN_RATIO = 0.62
 FINAL_LR_FRAC = 0.05
 cuda-5080 depth = 8
 cuda-5080 device_batch_size = 8
+cuda-5080 n_embd = 384
+cuda-5080 n_head = 3
 ```
 
-历史最佳和本轮线上可比结果要分开看：
+RTX 5080 只保留一个 best，其它结果只作为 baseline、prior 或 check：
 
 ```text
-original cuda-5080 baseline:        1.124884
-historical best before W&B online:  1.118723
-W&B online control, same params:    1.119551
-W&B online best, warmdown 0.62:     1.118794
-W&B online best, batch size 8:      1.117817
-W&B batch size 4 check:             1.117953
-W&B smaller depth 6 check:          1.118114
-W&B depth 6 + batch size 16 check:  1.123627
-W&B depth 10 + batch size 8 check:  1.185109
-W&B depth 10 + batch size 4 check:  1.179449
-online control improvement:         0.001734，约 0.155%
+baseline:                         1.124884
+prior kept result:                1.118723
+online control, prior params:     1.119551
+warmdown 0.62 check:              1.118794
+prior kept result:                1.117817  (WARMDOWN_RATIO=0.62, device_batch_size=8)
+best:                             1.101613  (ASPECT_RATIO=48, n_embd=384, n_head=3)
+batch size 4 check:               1.117953
+smaller depth 6 check:            1.118114
+head dim 64 check:                1.127478
+head dim 256 check:               1.121990
+aspect ratio 80 check:            1.138080
+depth 6 + batch size 16 check:    1.123627
+depth 10 + batch size 8 check:    1.185109
+depth 10 + batch size 4 check:    1.179449
+improvement vs previous best:     0.016204，约 1.45%
+improvement vs online control:    0.017938，约 1.60%
 ```
 
-`device_batch_size=8` 的 `1.117817` 已经低于历史 `1.118723` 和 W&B online control。因为 LR schedule 按 wall-clock progress 衰减，W&B online 的额外开销会轻微改变每一步对应的 LR，因此本轮仍用 online control 作为主要参照。
+`1.101613` 是本页唯一 best。它低于 prior kept result `1.117817` 和 online control `1.119551`。因为 LR schedule 按 wall-clock progress 衰减，W&B online 的额外开销会轻微改变每一步对应的 LR，因此本轮用 online control 作为主要参照。
 
 本轮 W&B online 实验结果：
 
@@ -118,17 +148,17 @@ discard      1.120227  xzaesero    FINAL_LR_FRAC 0.05 -> 0.03
 discard      1.128194  zr93krib    device_batch_size 16 -> 32
 discard      1.119294  8b36y5s0    MATRIX_LR 0.04 -> 0.045
 discard      1.120488  6ifzdxrj    WEIGHT_DECAY 0.20 -> 0.15
-control      1.119551  34ey2vzp    online rerun of historical best params
-keep-online  1.118889  xk59xt0t    WARMDOWN_RATIO 0.75 -> 0.60
+control      1.119551  34ey2vzp    online rerun of prior kept params
+keep         1.118889  xk59xt0t    WARMDOWN_RATIO 0.75 -> 0.60
 discard      1.119393  smirnx9y    WARMDOWN_RATIO 0.60 -> 0.55
 discard      1.119085  2wn294ua    WARMDOWN_RATIO 0.60 -> 0.58
-keep-online  1.118794  mupl9ffj    WARMDOWN_RATIO 0.60 -> 0.62
+keep         1.118794  mupl9ffj    WARMDOWN_RATIO 0.60 -> 0.62
 discard      1.118904  rtdsgy9i    WARMDOWN_RATIO 0.62 -> 0.63
 discard      1.118858  f7imtocw    WARMDOWN_RATIO 0.62 -> 0.61
 discard      1.118995  5i37diu3    WARMDOWN_RATIO 0.62 -> 0.625
 discard      1.118829  6t5lhxpn    WARMDOWN_RATIO 0.62 plus MATRIX_LR 0.045
 discard      1.119033  0ryet5y7    WARMDOWN_RATIO 0.62 plus FINAL_LR_FRAC 0.06
-keep-online  1.117817  xc69hrb8    WARMDOWN_RATIO 0.62 plus device_batch_size 16 -> 8
+keep         1.117817  xc69hrb8    WARMDOWN_RATIO 0.62 plus device_batch_size 16 -> 8
 discard      1.117953  n8vin2ze    device_batch_size 8 -> 4
 discard      1.118114  fzitxzd4    depth 8 -> 6 on batch 8 base
 discard      1.123627  yk5k5rcq    depth 6 plus device_batch_size 8 -> 16
@@ -136,22 +166,34 @@ discard      1.185109  7oulf4ir    depth 8 -> 10 plus device_batch_size 8
 discard      1.179449  yn5qjmmb    depth 8 -> 10 plus device_batch_size 4
 ```
 
+Head/dim follow-up 实验结果：
+
+```text
+status   val_bpb   W&B run   change
+discard  1.127478  4fixs07v  HEAD_DIM 128 -> 64; n_head 4 -> 8, same n_embd 512
+discard  1.121990  cbu8fk2f  HEAD_DIM 128 -> 256; n_head 4 -> 2, same n_embd 512
+best     1.101613  ufccorpq  ASPECT_RATIO 64 -> 48; n_embd 512 -> 384, n_head 4 -> 3
+discard  1.138080  mvmhghgt  ASPECT_RATIO 64 -> 80; n_embd 512 -> 640, n_head 4 -> 5
+```
+
 主要 insight：
 
 1. **本轮主要收益来自更短 warmdown。** W&B online control 是 `1.119551`，`WARMDOWN_RATIO=0.62` 降到 `1.118794`。固定 5 分钟预算下，online logging 让 schedule 对 wall-clock 更敏感，0.75 会偏早进入低 LR 的后半段；0.62 保留了更长高 LR 训练，同时仍有足够末段收敛。
-2. **0.62 附近存在清晰局部最优。** `0.60` 是 `1.118889`，`0.61` 是 `1.118858`，`0.62` 最好，`0.625` 和 `0.63` 又回退。这说明方向不是随机单点，而是一个窄窗口。
+2. **0.62 附近存在清晰局部低点。** `0.60` 是 `1.118889`，`0.61` 是 `1.118858`，`0.62` 是 `1.118794`，`0.625` 和 `0.63` 又回退。这说明方向不是随机单点，而是一个窄窗口。
 3. **lm_head LR 的旧结论没有继续外推。** 在 `UNEMBEDDING_LR=0.006` 基础上改到 `0.005/0.007/0.008` 都变差，说明当前输出层 LR 已经接近合适，不再需要继续加。
 4. **microbatch 方向不是单调吞吐最优。** `device_batch_size 16 -> 32` 把 tokens 从 `99.4M` 提到 `104.1M`、MFU 从约 `9.01%` 到 `9.44%`，但 `val_bpb` 变差到 `1.128194`，显存也涨到约 `11.4GB`。相反，`device_batch_size 16 -> 8` 只训练 `96.5M` tokens、MFU 降到 `8.75%`，但 `val_bpb` 提升到 `1.117817`，显存降到约 `3.3GB`。继续把 `device_batch_size 8 -> 4` 后，tokens 降到 `92.5M`、显存降到约 `1.9GB`，但 `val_bpb=1.117953`，非常接近但没超过 batch 8。这说明当前模型更受 microbatch 数值/噪声形态影响，而不只是训练 token 数；batch 8 是目前最好的折中。
-5. **小模型吞吐翻倍但没有赢。** 在 batch 8 底座上把 `depth 8 -> 6` 后，参数从 `50.3M` 降到 `26.3M`，显存从约 `3.3GB` 降到 `2.0GB`，5 分钟训练 tokens 从 `96.5M` 提到 `187.7M`，但 `val_bpb=1.118114`，仍差于当前最佳 `1.117817`。这说明 5080 上不是单纯缺训练 token；`depth=8` 的容量在当前 5 分钟任务里仍然值钱。
-6. **depth=6 下 batch 16 明显变差。** 在同样 `depth=6` 下把 `device_batch_size 8 -> 16` 后，训练量几乎不变（`187.7M -> 186.6M` tokens），显存升到约 `3.6GB`，但 `val_bpb` 退到 `1.123627`。这说明 batch/microbatch 影响的不只是吞吐，也会明显改变优化轨迹；当前小模型更适合 batch 8。
-7. **加大到 depth 10 明显不适合当前 5 分钟预算。** `depth 8 -> 10` 后参数从 `50.3M` 涨到 `85.9M`，但 5 分钟训练量从 `96.5M` tokens 掉到约 `56-57M`。`device_batch_size=8` 得到 `1.185109`，`device_batch_size=4` 得到 `1.179449`；batch 4 对 depth 10 有帮助，也省显存（约 `5.1GB -> 3.1GB`），但仍远差于当前最佳 `1.117817`。这说明当前 5080 固定时间任务里，继续加大模型会被训练量不足严重拖垮。
-8. **组合调参没有超过 batch 8。** `0.62 + MATRIX_LR=0.045` 得到 `1.118829`，接近但差于 `0.62` 单独配置；`0.62 + FINAL_LR_FRAC=0.06` 得到 `1.119033`。当前应该保留 `WARMDOWN_RATIO=0.62` 和 `device_batch_size=8`，不要叠加这些组合。
+5. **同宽度改 head 数明显变差。** `HEAD_DIM=64` 保持 `n_embd=512` 但把 head 从 `4` 加到 `8`，结果 `1.127478`；`HEAD_DIM=256` 把 head 降到 `2`，结果 `1.121990`。当前宽度下 `HEAD_DIM=128, n_head=4` 更稳。
+6. **更窄的 `ASPECT_RATIO=48` 是本轮主要收益。** 参数从 `50.3M` 降到 `33.0M`，显存从约 `3.3GB` 降到 `2.5GB`，5 分钟训练 tokens 从 `96.5M` 提到 `146.8M`，`val_bpb` 降到 `1.101613`。这说明当前 5080 固定时间任务更偏训练量受限，适度变窄比保持 50M 参数更好。
+7. **更宽的 `ASPECT_RATIO=80` 明显不适合当前 5 分钟预算。** 参数从 `50.3M` 涨到 `70.8M`，训练 tokens 降到 `68.7M`，`val_bpb=1.138080`。继续加宽会被训练量不足拖垮。
+8. **小模型 depth=6 和宽度变窄不是一回事。** `depth=6` 虽然 tokens 到 `187.7M`，但 `val_bpb=1.118114`；`ASPECT_RATIO=48` 保持 depth 8 和层数结构，只把宽度降到 384，结果明显更好。当前应优先沿宽度/训练量方向微调，而不是直接减层。
+9. **组合调参没有超过 batch 8。** `0.62 + MATRIX_LR=0.045` 得到 `1.118829`；`0.62 + FINAL_LR_FRAC=0.06` 得到 `1.119033`。当前应该保留 `WARMDOWN_RATIO=0.62`、`device_batch_size=8` 和 `ASPECT_RATIO=48`。
 
 下一轮优先方向：
 
-1. 如果继续 5080 online sweep，优先以 `WARMDOWN_RATIO=0.62`、`device_batch_size=8` 为底座。
-2. 可以在 batch 8 底座上小步测 `WARMDOWN_RATIO=0.615/0.622`，确认 batch 8 的收益是否还能扩大。
-3. 暂缓 `device_batch_size=4/32`、`depth=6` 小模型、`depth=6 + device_batch_size=16`、`depth=10` 大模型、RoPE base 200k 这类已经显示负收益或与当前 2K context 不匹配的方向。
+1. 如果继续 5080 online sweep，优先以 `ASPECT_RATIO=48`、`HEAD_DIM=128`、`WARMDOWN_RATIO=0.62`、`device_batch_size=8` 为底座。
+2. 可以小步测 `ASPECT_RATIO=40/44/52/56`，确认最佳宽度区间。
+3. 可以在 `ASPECT_RATIO=48` 底座上复测 `device_batch_size=4/16` 和 `WARMDOWN_RATIO=0.615/0.622`，因为模型宽度变化后最优 batch/schedule 可能变化。
+4. 暂缓 `HEAD_DIM=64/256`、`ASPECT_RATIO=80`、`depth=6`、`depth=10` 这类已经显示负收益的方向。
 
 ## 哪些进 Git
 
@@ -245,7 +287,7 @@ description  简短实验说明，可以写中文
 ```text
 experiment	val_bpb	memory_gb	status	wandb_url	description
 000-baseline-rtx5080-cuda5080	1.124884	6.0	keep		5080 基线，cuda-5080 profile
-015-test-warmdown-ratio-0p62	1.118794	6.0	keep	https://wandb.ai/...	W&B online 最佳，WARMDOWN_RATIO 0.62
+015-test-warmdown-ratio-0p62	1.118794	6.0	keep	https://wandb.ai/...	W&B online keep，WARMDOWN_RATIO 0.62
 018-test-warmdown-ratio-0p625	1.118995	6.0	discard	https://wandb.ai/...	0.625 不如 0.62
 019-test-device-batch-size-32	0.000000	0.0	crash	https://wandb.ai/...	batch 太大，OOM
 ```
